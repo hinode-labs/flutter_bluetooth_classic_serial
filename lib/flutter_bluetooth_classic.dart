@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+
 import 'package:flutter/services.dart';
 
 class FlutterBluetoothClassic {
@@ -113,6 +114,14 @@ class FlutterBluetoothClassic {
       return await _channel.invokeMethod('connect', {'address': address});
     } catch (e) {
       throw BluetoothException('Failed to connect to device: $e');
+    }
+  }
+
+  Future<bool> listen() async {
+    try {
+      return await _channel.invokeMethod('listen');
+    } catch (e) {
+      throw BluetoothException('Failed to listen for incoming connections');
     }
   }
 
