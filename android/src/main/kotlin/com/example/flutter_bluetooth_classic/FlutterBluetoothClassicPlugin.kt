@@ -5,6 +5,7 @@ import android.app.Activity
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
+import android.bluetooth.BluetoothServerSocket
 import android.bluetooth.BluetoothSocket
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -43,7 +44,9 @@ class FlutterBluetoothClassicPlugin: FlutterPlugin, MethodCallHandler, ActivityA
   private var activity: Activity? = null
   
   private var bluetoothAdapter: BluetoothAdapter? = null
-  private var connectTask: ConnectTask? = null
+  private var outgoingConnectionCreator: OutgoingConnectionCreator? = null
+  private var connectionListener: IncomingConnectionListener? = null
+  private var activeConnection: ActiveConnection? = null
   
   private var stateStreamHandler = BluetoothStateStreamHandler()
   private var connectionStreamHandler = BluetoothConnectionStreamHandler()
@@ -54,7 +57,8 @@ class FlutterBluetoothClassicPlugin: FlutterPlugin, MethodCallHandler, ActivityA
   
   // SPP UUID for Bluetooth Classic communication
   private val SPP_UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
-    override fun onAttachedToEngine(flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
+
+  override fun onAttachedToEngine(flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
     context = flutterPluginBinding.applicationContext
     
     channel = MethodChannel(flutterPluginBinding.binaryMessenger, "com.flutter_bluetooth_classic.plugin/flutter_bluetooth_classic")
@@ -184,11 +188,12 @@ class FlutterBluetoothClassicPlugin: FlutterPlugin, MethodCallHandler, ActivityA
           return
         }
         
-        val address = call.argument<String>("address")
+        val address: String? = call.argument<String?>("address")
         if (address == null) {
           result.error("INVALID_ARGUMENT", "Device address is required", null)
           return
         }
+        Log.i("BtPlugin", "Received connect address: $address")
         
         checkPermissions { granted ->
           if (granted) {
@@ -197,7 +202,7 @@ class FlutterBluetoothClassicPlugin: FlutterPlugin, MethodCallHandler, ActivityA
               bluetoothAdapter?.cancelDiscovery()
               
               // Disconnect any existing connection
-              connectTask?.cancel()
+              activeConnection?.close()
               
               // Get the Bluetooth device
               val device = bluetoothAdapter?.getRemoteDevice(address)
@@ -207,8 +212,35 @@ class FlutterBluetoothClassicPlugin: FlutterPlugin, MethodCallHandler, ActivityA
               }
               
               // Connect to the device
-              connectTask = ConnectTask(device, SPP_UUID, connectionStreamHandler, dataStreamHandler)
-              connectTask?.start()
+              outgoingConnectionCreator = OutgoingConnectionCreator(device, SPP_UUID)
+              outgoingConnectionCreator?.createConnection(
+                onConnectionCreated = {socket ->
+                  activeConnection =
+                    ActiveConnection(
+                      socket,
+                      connectionStreamHandler,
+                      dataStreamHandler,
+                      cleanupFn = {
+                        activeConnection = null
+                      })
+                  activeConnection?.startReceivingData()
+
+                  val connectionMap = mapOf(
+                    "isConnected" to true,
+                    "deviceAddress" to socket.remoteDevice?.address,
+                    "status" to "CONNECTED"
+                  )
+                  connectionStreamHandler.send(connectionMap)
+                },
+                onError = { e ->
+                  val connectionMap = mapOf(
+                    "isConnected" to false,
+                    "deviceAddress" to (device.address ?: ""),
+                    "status" to "ERROR: ${e.message}"
+                  )
+                  connectionStreamHandler.send(connectionMap)
+                }
+              )
               
               result.success(true)
             } catch (e: Exception) {
@@ -220,27 +252,96 @@ class FlutterBluetoothClassicPlugin: FlutterPlugin, MethodCallHandler, ActivityA
         }
       }
       "disconnect" -> {
-        connectTask?.cancel()
+        activeConnection?.close()
         result.success(true)
       }
       "sendData" -> {
-        val data = call.argument<List<Int>>("data")
+        val data: ByteArray? = call.argument<ByteArray?>("data")
         if (data == null) {
           result.error("INVALID_ARGUMENT", "Data is required", null)
           return
         }
-        
-        if (connectTask == null || !connectTask!!.isConnected()) {
+
+        if (activeConnection == null || !(activeConnection!!.isConnected())) {
           result.error("NOT_CONNECTED", "Not connected to any device", null)
           return
         }
         
         try {
-          val byteArray = data.map { it.toByte() }.toByteArray()
-          connectTask?.write(byteArray)
+          activeConnection?.write(data)
           result.success(true)
         } catch (e: Exception) {
           result.error("SEND_FAILED", "Failed to send data: ${e.message}", null)
+        }
+      }
+      "listen" -> {
+        var appName: String? = call.argument<String?>("appName")
+        if (appName == null || appName == "") {
+          // Fallback to a default value if no app name is provided
+          appName = "flutterBluetoothClassicApp"
+        }
+
+        if (bluetoothAdapter == null) {
+          result.error("BLUETOOTH_UNAVAILABLE", "Bluetooth is not available on this device", null)
+          return
+        }
+
+        checkPermissions { granted ->
+          if (granted) {
+            try {
+              // Stop any ongoing discovery
+              bluetoothAdapter?.cancelDiscovery()
+
+              // Connect to the device
+              val serverSocket =
+                bluetoothAdapter?.listenUsingInsecureRfcommWithServiceRecord(appName, SPP_UUID)
+              if (serverSocket == null) {
+                result.error("LISTEN_FAILED", "Failed to listen for incoming connections", null)
+                return@checkPermissions
+              }
+
+              connectionListener = IncomingConnectionListener(serverSocket)
+              connectionListener?.listenForConnection(
+                onAcceptConnection = {socket ->
+                  if (activeConnection == null || !(activeConnection!!.isConnected())) {
+                    activeConnection =
+                      ActiveConnection(
+                        socket,
+                        connectionStreamHandler,
+                        dataStreamHandler,
+                        cleanupFn = {
+                          Log.i("BtPlugin", "Cleanup fn called")
+                          activeConnection = null
+                        })
+                    activeConnection?.startReceivingData()
+
+                    val connectionMap = mapOf(
+                      "isConnected" to true,
+                      "deviceAddress" to socket.remoteDevice?.address,
+                      "status" to "CONNECTED"
+                    )
+                    connectionStreamHandler.send(connectionMap)
+                  } else {
+                    throw IOException("Connection already active")
+                  }
+                },
+                onError = {e ->
+                  val connectionMap = mapOf(
+                    "isConnected" to false,
+                    "deviceAddress" to "unknown",
+                    "status" to "ERROR: ${e.message}"
+                  )
+                  connectionStreamHandler.send(connectionMap)
+                }
+              )
+
+              result.success(true)
+            } catch (e: Exception) {
+              result.error("CONNECTION_FAILED", "Failed to connect to device: ${e.message}", null)
+            }
+          } else {
+            result.error("PERMISSION_DENIED", "Bluetooth permissions not granted", null)
+          }
         }
       }
       else -> {
@@ -340,7 +441,7 @@ class FlutterBluetoothClassicPlugin: FlutterPlugin, MethodCallHandler, ActivityA
         
         if (device != null) {
           val deviceName = device.name ?: "Unknown"
-          val deviceAddress = device.address
+          val deviceAddress = device.address ?: "Unknown"
           
           // We can notify via the state channel for simplicity
           val deviceMap = mapOf(
@@ -370,8 +471,9 @@ class FlutterBluetoothClassicPlugin: FlutterPlugin, MethodCallHandler, ActivityA
     } catch (e: IllegalArgumentException) {
       // Receivers might not be registered, ignore
     }
-    
-    connectTask?.cancel()
+
+    activeConnection?.close()
+    activeConnection = null
   }
   
   override fun onAttachedToActivity(binding: ActivityPluginBinding) {
@@ -467,137 +569,181 @@ class BluetoothDataStreamHandler : EventChannel.StreamHandler {
   }
 }
 
-// Task for handling Bluetooth connection
-class ConnectTask(
-  private val device: BluetoothDevice,
-  private val uuid: UUID,
-  private val connectionStreamHandler: BluetoothConnectionStreamHandler,
-  private val dataStreamHandler: BluetoothDataStreamHandler
+class IncomingConnectionListener(
+  private val serverSocket: BluetoothServerSocket
 ) {
-  private var socket: BluetoothSocket? = null
-  private var inputStream: InputStream? = null
-  private var outputStream: OutputStream? = null
-  private var running = false
-  
-  fun start() {
-    running = true
+  fun listenForConnection(
+    onAcceptConnection: (socket: BluetoothSocket) -> Unit,
+    onError: (e: Exception) -> Unit
+  ) {
+    var listening = true
+    CoroutineScope(Dispatchers.IO).launch {
+      while (listening) {
+        val accSocket = try {
+          serverSocket.accept()
+        } catch (e: IOException) {
+          onError(e)
+          listening = false
+          break
+        }
+        accSocket?.also { btSocket ->
+          try {
+            onAcceptConnection(btSocket)
+            serverSocket.close()
+            listening = false
+          } catch (e: Exception) {
+            onError(e)
+          }
+        }
+      }
+    }
+  }
+}
+
+class OutgoingConnectionCreator(
+  private val device: BluetoothDevice?,
+  private val uuid: UUID,
+) {
+  fun createConnection(onConnectionCreated: (socket: BluetoothSocket) -> Unit, onError: (Exception) -> Unit) {
     CoroutineScope(Dispatchers.IO).launch {
       try {
         // Create socket and connect
-        socket = device.createRfcommSocketToServiceRecord(uuid)
+        val socket = device?.createRfcommSocketToServiceRecord(uuid)
         socket?.connect()
-        
-        // Send connection success
-        val connectionMap = mapOf(
-          "isConnected" to true,
-          "deviceAddress" to device.address,
-          "status" to "CONNECTED"
-        )
-        connectionStreamHandler.send(connectionMap)
-        
+
+        onConnectionCreated(socket!!)
+      } catch (e: IOException) {
+        onError(e)
+      }
+    }
+  }
+}
+
+class ActiveConnection(
+  private val socket: BluetoothSocket,
+  private val connectionStreamHandler: BluetoothConnectionStreamHandler,
+  private val dataStreamHandler: BluetoothDataStreamHandler,
+  private val cleanupFn: () -> Unit
+) {
+  private var inputStream: InputStream? = null
+  private var outputStream: OutputStream? = null
+  private var readingData = false
+  private var connectedDevice: BluetoothDevice? = null
+
+  fun startReceivingData() {
+    readingData = true
+
+    CoroutineScope(Dispatchers.IO).launch {
+      try {
         // Get streams
-        inputStream = socket?.inputStream
-        outputStream = socket?.outputStream
-        
+        inputStream = socket.inputStream
+        outputStream = socket.outputStream
+        connectedDevice = socket.remoteDevice
+
         // Start reading data
         readData()
       } catch (e: IOException) {
         // Send connection failure
         val connectionMap = mapOf(
           "isConnected" to false,
-          "deviceAddress" to device.address,
+          "deviceAddress" to (connectedDevice?.address ?: ""),
           "status" to "ERROR: ${e.message}"
         )
         connectionStreamHandler.send(connectionMap)
-        
+
         // Close and cleanup
-        cancel()
+        close()
       }
     }
+
   }
-  
+
   private suspend fun readData() {
     val buffer = ByteArray(1024)
     var bytes: Int
-    
-    while (running) {
+
+    while (readingData) {
       try {
         // Read data
         bytes = inputStream?.read(buffer) ?: -1
-        
+
         if (bytes > 0) {
           val data = buffer.sliceArray(0 until bytes)
-          
+
+          Log.i("BtPlugin", "Received read data: $data")
+
           // Convert to List<Int> for Flutter
           val dataList = data.map { it.toInt() and 0xFF }
-          
+
           // Send data to Flutter
           val dataMap = mapOf(
-            "deviceAddress" to device.address,
+            "deviceAddress" to connectedDevice?.address,
             "data" to dataList
           )
-          
+
           withContext(Dispatchers.Main) {
             dataStreamHandler.send(dataMap)
           }
         }
       } catch (e: IOException) {
+        Log.i("BtPlugin", "Exception in reading data: ${e.message}")
+
         // If there's an error, send disconnection event
-        if (running) {
+        if (readingData) {
           val connectionMap = mapOf(
             "isConnected" to false,
-            "deviceAddress" to device.address,
+            "deviceAddress" to (connectedDevice?.address ?: "Unknown"),
             "status" to "DISCONNECTED: ${e.message}"
           )
-          
+
           withContext(Dispatchers.Main) {
             connectionStreamHandler.send(connectionMap)
           }
-          
+
           // Break the loop
-          running = false
+          readingData = false
+          close()
         }
       }
     }
   }
-  
+
   fun write(data: ByteArray) {
     CoroutineScope(Dispatchers.IO).launch {
       try {
+        Log.i("BtPlugin", "Received write data: $data")
         outputStream?.write(data)
       } catch (e: IOException) {
         // Handle write error
         val connectionMap = mapOf(
           "isConnected" to false,
-          "deviceAddress" to device.address,
+          "deviceAddress" to connectedDevice?.address,
           "status" to "WRITE_ERROR: ${e.message}"
         )
-        
+
         connectionStreamHandler.send(connectionMap)
-        
+
         // If write fails, cancel the connection
-        cancel()
+        close()
       }
     }
   }
-  
+
   fun isConnected(): Boolean {
-    return socket?.isConnected == true
+    return socket.isConnected == true
   }
-  
-  fun cancel() {
-    running = false
-    
+
+  fun close() {
     try {
       inputStream?.close()
       outputStream?.close()
-      socket?.close()
+      socket.close()
     } catch (e: IOException) {
       // Ignore close errors
     } finally {
       inputStream = null
       outputStream = null
-      socket = null
+      cleanupFn()
     }
   }
 }

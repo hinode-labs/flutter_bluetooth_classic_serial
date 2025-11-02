@@ -1,5 +1,6 @@
-import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
+
 import './flutter_bluetooth_classic_platform_interface.dart';
 
 class BluetoothDevice {
@@ -112,6 +113,24 @@ class BluetoothService {
       }
 
       return await _platform.connect(address);
+    } catch (e) {
+      if (kDebugMode) print('Error connecting to device: $e');
+      rethrow;
+    }
+  }
+
+  static Future<bool> listen() async {
+    try {
+      if (kIsWeb) {
+        throw PlatformException(
+          code: 'WEB_LIMITATION',
+          message: 'Bluetooth Classic not supported on web',
+          details:
+              'Web browsers only support Bluetooth Low Energy (BLE) connections',
+        );
+      }
+
+      return await _platform.listen();
     } catch (e) {
       if (kDebugMode) print('Error connecting to device: $e');
       rethrow;

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+
 import 'package:flutter/services.dart';
 
 class FlutterBluetoothClassic {
@@ -27,14 +28,17 @@ class FlutterBluetoothClassic {
       _connectionStreamController.stream;
   Stream<BluetoothData> get onDataReceived => _dataStreamController.stream;
 
+  String _appName = "";
+
   /// Factory constructor to maintain a single instance of the class
-  factory FlutterBluetoothClassic() {
-    _instance ??= FlutterBluetoothClassic._();
+  factory FlutterBluetoothClassic(String appName) {
+    _instance ??= FlutterBluetoothClassic._(appName);
     return _instance!;
   }
 
   /// Private constructor that sets up the event listeners
-  FlutterBluetoothClassic._() {
+  FlutterBluetoothClassic._(String appName) {
+    _appName = appName;
     // Listen for state changes
     _stateChannel.receiveBroadcastStream().listen((dynamic event) {
       _stateStreamController.add(BluetoothState.fromMap(event));
@@ -113,6 +117,14 @@ class FlutterBluetoothClassic {
       return await _channel.invokeMethod('connect', {'address': address});
     } catch (e) {
       throw BluetoothException('Failed to connect to device: $e');
+    }
+  }
+
+  Future<bool> listen() async {
+    try {
+      return await _channel.invokeMethod('listen', {'appName': _appName});
+    } catch (e) {
+      throw BluetoothException('Failed to listen for incoming connections: $e');
     }
   }
 
@@ -217,6 +229,7 @@ class BluetoothConnectionState {
   });
 
   factory BluetoothConnectionState.fromMap(dynamic map) {
+    print(map);
     return BluetoothConnectionState(
       isConnected: map['isConnected'],
       deviceAddress: map['deviceAddress'],
@@ -239,6 +252,7 @@ class BluetoothData {
   }
 
   factory BluetoothData.fromMap(dynamic map) {
+    print(map);
     return BluetoothData(
       deviceAddress: map['deviceAddress'],
       data: List<int>.from(map['data']),

@@ -1,4 +1,5 @@
 import 'dart:async';
+
 import 'package:flutter/services.dart';
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 
@@ -28,6 +29,7 @@ abstract class FlutterBluetoothClassicPlatform extends PlatformInterface {
   Future<bool> startDiscovery();
   Future<bool> stopDiscovery();
   Future<bool> connect(String address);
+  Future<bool> listen();
   Future<bool> disconnect();
   Future<bool> sendData(List<int> data);
 }
@@ -89,6 +91,10 @@ class _DefaultPlatform extends FlutterBluetoothClassicPlatform {
   Future<bool> connect(String address) async {
     return await _channel.invokeMethod('connect', {'address': address}) ??
         false;
+  }
+
+  Future<bool> listen() async {
+    return await _channel.invokeMethod('listen') ?? false;
   }
 
   @override
