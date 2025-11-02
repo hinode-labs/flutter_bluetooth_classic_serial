@@ -126,7 +126,7 @@ class _BluetoothClassicDemoState extends State<BluetoothClassicDemo> {
   @override
   void initState() {
     super.initState();
-    _bluetooth = FlutterBluetoothClassic();
+    _bluetooth = FlutterBluetoothClassic("app");
     _initBluetooth();
   }
 

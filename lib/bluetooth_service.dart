@@ -146,6 +146,15 @@ class BluetoothService {
     }
   }
 
+  static Future<bool> stopListen() async {
+    try {
+      return await _platform.stopListen();
+    } catch (e) {
+      if (kDebugMode) print('Error stopping bluetooth server: $e');
+      return false;
+    }
+  }
+
   static Future<bool> sendData(List<int> data) async {
     try {
       if (kIsWeb) {

@@ -255,6 +255,10 @@ class FlutterBluetoothClassicPlugin: FlutterPlugin, MethodCallHandler, ActivityA
         activeConnection?.close()
         result.success(true)
       }
+      "stopListen" -> {
+        connectionListener?.stopListen()
+        result.success(true)
+      }
       "sendData" -> {
         val data: ByteArray? = call.argument<ByteArray?>("data")
         if (data == null) {
@@ -597,6 +601,10 @@ class IncomingConnectionListener(
         }
       }
     }
+  }
+
+  fun stopListen() {
+    serverSocket.close()
   }
 }
 

@@ -31,6 +31,7 @@ abstract class FlutterBluetoothClassicPlatform extends PlatformInterface {
   Future<bool> connect(String address);
   Future<bool> listen();
   Future<bool> disconnect();
+  Future<bool> stopListen();
   Future<bool> sendData(List<int> data);
 }
 
@@ -100,6 +101,11 @@ class _DefaultPlatform extends FlutterBluetoothClassicPlatform {
   @override
   Future<bool> disconnect() async {
     return await _channel.invokeMethod('disconnect') ?? false;
+  }
+
+  @override
+  Future<bool> stopListen() async {
+    return await _channel.invokeMethod('stopListen') ?? false;
   }
 
   @override

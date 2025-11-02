@@ -128,6 +128,14 @@ class FlutterBluetoothClassic {
     }
   }
 
+  Future<bool> stopListen() async {
+    try {
+      return await _channel.invokeMethod('stopListen');
+    } catch (e) {
+      throw BluetoothException('Failed to stop bluetooth server: $e');
+    }
+  }
+
   /// Disconnect from a device
   Future<bool> disconnect() async {
     try {
