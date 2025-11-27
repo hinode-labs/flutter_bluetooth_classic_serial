@@ -13,7 +13,6 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.os.Build
-import android.util.Log
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import io.flutter.embedding.engine.plugins.FlutterPlugin
@@ -105,7 +104,7 @@ class FlutterBluetoothClassicPlugin: FlutterPlugin, MethodCallHandler, ActivityA
           result.error("ACTIVITY_UNAVAILABLE", "Activity is not available", null)
           return
         }
-        
+
         checkPermissions { granted ->
           if (granted) {
             val enableBtIntent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
@@ -193,7 +192,6 @@ class FlutterBluetoothClassicPlugin: FlutterPlugin, MethodCallHandler, ActivityA
           result.error("INVALID_ARGUMENT", "Device address is required", null)
           return
         }
-        Log.i("BtPlugin", "Received connect address: $address")
         
         checkPermissions { granted ->
           if (granted) {
@@ -314,7 +312,6 @@ class FlutterBluetoothClassicPlugin: FlutterPlugin, MethodCallHandler, ActivityA
                         connectionStreamHandler,
                         dataStreamHandler,
                         cleanupFn = {
-                          Log.i("BtPlugin", "Cleanup fn called")
                           activeConnection = null
                         })
                     activeConnection?.startReceivingData()
@@ -678,8 +675,6 @@ class ActiveConnection(
         if (bytes > 0) {
           val data = buffer.sliceArray(0 until bytes)
 
-          Log.i("BtPlugin", "Received read data: $data")
-
           // Convert to List<Int> for Flutter
           val dataList = data.map { it.toInt() and 0xFF }
 
@@ -694,7 +689,6 @@ class ActiveConnection(
           }
         }
       } catch (e: IOException) {
-        Log.i("BtPlugin", "Exception in reading data: ${e.message}")
 
         // If there's an error, send disconnection event
         if (readingData) {
@@ -719,7 +713,6 @@ class ActiveConnection(
   fun write(data: ByteArray) {
     CoroutineScope(Dispatchers.IO).launch {
       try {
-        Log.i("BtPlugin", "Received write data: $data")
         outputStream?.write(data)
       } catch (e: IOException) {
         // Handle write error

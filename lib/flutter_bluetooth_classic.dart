@@ -190,6 +190,10 @@ class BluetoothState {
   BluetoothState({required this.isEnabled, required this.status});
 
   factory BluetoothState.fromMap(dynamic map) {
+    // TODO: Figure out proper state propagation
+    if (map.containsKey('event') && map['event'] == 'permissionResult') {
+      return BluetoothState(isEnabled: false, status: '');
+    }
     return BluetoothState(
       isEnabled: map['isEnabled'],
       status: map['status'],
